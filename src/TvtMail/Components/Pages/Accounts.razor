@@ -1,0 +1,302 @@
+@page "/accounts"
+@attribute [Authorize]
+@using System.ComponentModel.DataAnnotations
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject CredentialProtector Credentials
+@inject ImapMailService MailService
+@inject NavigationManager Navigation
+
+<PageTitle>Tài khoản mail - TVT Mail</PageTitle>
+
+<section class="page-header">
+    <div>
+        <span class="eyebrow">MAIL ACCOUNTS</span>
+        <h1>Tài khoản mail</h1>
+        <p>Thêm nhiều mailbox IMAP và quản lý tập trung.</p>
+    </div>
+</section>
+
+<div class="accounts-layout">
+    <section class="panel account-form-panel">
+        <div class="panel-heading">
+            <div>
+                <h2>Thêm mailbox</h2>
+                <p>Kết nối IMAP trước khi lưu.</p>
+            </div>
+            <button type="button" class="btn secondary" @onclick="ApplyCockLiPreset">Preset Cock.li</button>
+        </div>
+
+        @if (!string.IsNullOrWhiteSpace(_formMessage))
+        {
+            <div class="alert @(_formSuccess ? "success" : "danger")">@_formMessage</div>
+        }
+
+        <EditForm Model="_form" OnValidSubmit="SaveAsync" FormName="add-mail-account">
+            <DataAnnotationsValidator />
+            <ValidationSummary class="validation-summary" />
+
+            <div class="form-grid">
+                <div class="field span-2">
+                    <label>Email</label>
+                    <InputText @bind-Value="_form.EmailAddress" placeholder="user@example.com" />
+                </div>
+
+                <div class="field">
+                    <label>Tên hiển thị</label>
+                    <InputText @bind-Value="_form.DisplayName" placeholder="Mail công việc" />
+                </div>
+
+                <div class="field">
+                    <label>Username IMAP</label>
+                    <InputText @bind-Value="_form.Username" placeholder="thường là email đầy đủ" />
+                </div>
+
+                <div class="field span-2">
+                    <label>Mật khẩu / App password</label>
+                    <InputText @bind-Value="_form.Password" type="password" autocomplete="new-password" />
+                </div>
+
+                <div class="field span-2">
+                    <label>IMAP Host</label>
+                    <InputText @bind-Value="_form.ImapHost" placeholder="mail.example.com" />
+                </div>
+
+                <div class="field">
+                    <label>Port</label>
+                    <InputNumber @bind-Value="_form.ImapPort" />
+                </div>
+
+                <div class="field">
+                    <label>Bảo mật</label>
+                    <InputSelect @bind-Value="_form.SecurityMode">
+                        <option value="@ImapSecurityMode.SslOnConnect">SSL/TLS ngay khi kết nối</option>
+                        <option value="@ImapSecurityMode.StartTls">STARTTLS</option>
+                        <option value="@ImapSecurityMode.Auto">Tự động</option>
+                        <option value="@ImapSecurityMode.None">Không mã hóa</option>
+                    </InputSelect>
+                </div>
+            </div>
+
+            <div class="form-actions">
+                <button type="submit" class="btn primary" disabled="@_saving">
+                    @(_saving ? "Đang kiểm tra IMAP…" : "Kết nối & lưu tài khoản")
+                </button>
+                <button type="button" class="btn ghost" @onclick="ResetForm">Làm mới</button>
+            </div>
+        </EditForm>
+
+        <div class="provider-note">
+            <strong>Cock.li:</strong> preset dùng <code>mail.cock.li:993</code> + SSL/TLS. Nếu bạn thực sự dùng domain <code>cook.li</code> khác Cock.li, hãy chọn cấu hình Custom và nhập đúng IMAP host của nhà cung cấp.
+        </div>
+    </section>
+
+    <section class="panel account-list-panel">
+        <div class="panel-heading">
+            <div>
+                <h2>Mailbox đã kết nối</h2>
+                <p>@_accounts.Count tài khoản</p>
+            </div>
+        </div>
+
+        @if (_loading)
+        {
+            <div class="loading-state">Đang tải…</div>
+        }
+        else if (_accounts.Count == 0)
+        {
+            <div class="empty-state compact"><h2>Chưa có tài khoản</h2><p>Thêm mailbox đầu tiên ở biểu mẫu bên trái.</p></div>
+        }
+        else
+        {
+            <div class="account-cards">
+                @foreach (var account in _accounts)
+                {
+                    <div class="account-card">
+                        <div class="account-card-head">
+                            <div class="sender-avatar">@Avatar(account)</div>
+                            <div class="account-card-title">
+                                <strong>@(!string.IsNullOrWhiteSpace(account.DisplayName) ? account.DisplayName : account.EmailAddress)</strong>
+                                <span>@account.EmailAddress</span>
+                            </div>
+                            <span class="status-badge @(account.IsActive ? "active" : "paused")">@(account.IsActive ? "Đang chạy" : "Tạm dừng")</span>
+                        </div>
+
+                        <dl class="account-info">
+                            <div><dt>IMAP</dt><dd>@account.ImapHost:@account.ImapPort</dd></div>
+                            <div><dt>Đồng bộ</dt><dd>@FormatSync(account.LastSyncedAtUtc)</dd></div>
+                        </dl>
+
+                        @if (!string.IsNullOrWhiteSpace(account.LastError))
+                        {
+                            <div class="account-error">@account.LastError</div>
+                        }
+
+                        <div class="account-card-actions">
+                            <a class="btn small secondary" href="@($"/account/{account.Id}")">Xem mail</a>
+                            <button type="button" class="btn small ghost" @onclick="() => SyncAccountAsync(account.Id)">Đồng bộ</button>
+                            <button type="button" class="btn small ghost" @onclick="() => ToggleActiveAsync(account.Id)">@(account.IsActive ? "Tạm dừng" : "Bật lại")</button>
+                            <button type="button" class="btn small danger-outline" @onclick="() => DeleteAsync(account.Id)">Xóa</button>
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+    </section>
+</div>
+
+@code {
+    private List<MailAccount> _accounts = new();
+    private AccountForm _form = new();
+    private bool _loading = true;
+    private bool _saving;
+    private bool _formSuccess;
+    private string? _formMessage;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _accounts = await db.MailAccounts
+            .AsNoTracking()
+            .OrderBy(x => x.DisplayName)
+            .ThenBy(x => x.EmailAddress)
+            .ToListAsync();
+        _loading = false;
+    }
+
+    private void ApplyCockLiPreset()
+    {
+        _form.ImapHost = "mail.cock.li";
+        _form.ImapPort = 993;
+        _form.SecurityMode = ImapSecurityMode.SslOnConnect;
+        if (string.IsNullOrWhiteSpace(_form.Username))
+            _form.Username = _form.EmailAddress;
+    }
+
+    private void ResetForm()
+    {
+        _form = new AccountForm();
+        _formMessage = null;
+    }
+
+    private async Task SaveAsync()
+    {
+        _saving = true;
+        _formMessage = null;
+        _formSuccess = false;
+
+        try
+        {
+            var username = string.IsNullOrWhiteSpace(_form.Username) ? _form.EmailAddress.Trim() : _form.Username.Trim();
+            var settings = new MailConnectionSettings(
+                _form.EmailAddress.Trim(),
+                username,
+                _form.Password,
+                _form.ImapHost.Trim(),
+                _form.ImapPort,
+                _form.SecurityMode);
+
+            await MailService.TestConnectionAsync(settings);
+
+            await using var db = await DbFactory.CreateDbContextAsync();
+            db.MailAccounts.Add(new MailAccount
+            {
+                DisplayName = _form.DisplayName.Trim(),
+                EmailAddress = _form.EmailAddress.Trim(),
+                Username = username,
+                ImapHost = _form.ImapHost.Trim(),
+                ImapPort = _form.ImapPort,
+                SecurityMode = _form.SecurityMode,
+                EncryptedPassword = Credentials.Protect(_form.Password),
+                IsActive = true,
+                CreatedAtUtc = DateTime.UtcNow
+            });
+            await db.SaveChangesAsync();
+
+            _formSuccess = true;
+            _formMessage = "Kết nối IMAP thành công. Đã lưu tài khoản.";
+            _form = new AccountForm();
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _formMessage = $"Không thể kết nối: {ex.Message}";
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task SyncAccountAsync(int id)
+    {
+        _formMessage = null;
+        try
+        {
+            await MailService.SyncAccountAsync(id);
+            _formSuccess = true;
+            _formMessage = "Đồng bộ mailbox thành công.";
+        }
+        catch (Exception ex)
+        {
+            _formSuccess = false;
+            _formMessage = $"Lỗi đồng bộ: {ex.Message}";
+        }
+        await LoadAsync();
+    }
+
+    private async Task ToggleActiveAsync(int id)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var account = await db.MailAccounts.FirstOrDefaultAsync(x => x.Id == id);
+        if (account is null) return;
+        account.IsActive = !account.IsActive;
+        await db.SaveChangesAsync();
+        await LoadAsync();
+    }
+
+    private async Task DeleteAsync(int id)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var account = await db.MailAccounts.FirstOrDefaultAsync(x => x.Id == id);
+        if (account is null) return;
+        db.MailAccounts.Remove(account);
+        await db.SaveChangesAsync();
+        _formSuccess = true;
+        _formMessage = "Đã xóa mailbox và cache mail tương ứng.";
+        await LoadAsync();
+    }
+
+    private static string Avatar(MailAccount account)
+    {
+        var source = !string.IsNullOrWhiteSpace(account.DisplayName) ? account.DisplayName : account.EmailAddress;
+        return string.IsNullOrWhiteSpace(source) ? "?" : source.Trim()[..1].ToUpperInvariant();
+    }
+
+    private static string FormatSync(DateTime? utc)
+        => utc is null ? "Chưa đồng bộ" : DateTime.SpecifyKind(utc.Value, DateTimeKind.Utc).AddHours(7).ToString("HH:mm dd/MM/yyyy");
+
+    private sealed class AccountForm
+    {
+        [Required(ErrorMessage = "Nhập email")]
+        [EmailAddress(ErrorMessage = "Email không hợp lệ")]
+        public string EmailAddress { get; set; } = string.Empty;
+
+        public string DisplayName { get; set; } = string.Empty;
+
+        public string Username { get; set; } = string.Empty;
+
+        [Required(ErrorMessage = "Nhập mật khẩu")]
+        public string Password { get; set; } = string.Empty;
+
+        [Required(ErrorMessage = "Nhập IMAP host")]
+        public string ImapHost { get; set; } = string.Empty;
+
+        [Range(1, 65535, ErrorMessage = "Port không hợp lệ")]
+        public int ImapPort { get; set; } = 993;
+
+        public ImapSecurityMode SecurityMode { get; set; } = ImapSecurityMode.SslOnConnect;
+    }
+}

@@ -1,0 +1,27 @@
+[Unit]
+Description=TVT Mail Blazor Web App
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/tvtmail
+ExecStart=/usr/bin/dotnet /var/www/tvtmail/TvtMail.dll
+Restart=always
+RestartSec=5
+KillSignal=SIGINT
+SyslogIdentifier=tvtmail
+Environment=ASPNETCORE_ENVIRONMENT=Production
+Environment=ASPNETCORE_URLS=http://127.0.0.1:4124
+EnvironmentFile=-/etc/tvtmail.env
+
+# Hardening cơ bản
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/var/www/tvtmail/data /var/www/tvtmail/DataProtection-Keys
+
+[Install]
+WantedBy=multi-user.target

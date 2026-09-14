@@ -1,0 +1,113 @@
+@page "/mail/{MailId:long}"
+@attribute [Authorize]
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject ImapMailService MailService
+@inject NavigationManager Navigation
+
+<PageTitle>@(_mail?.Subject ?? "Xem mail") - TVT Mail</PageTitle>
+
+@if (_loading)
+{
+    <div class="loading-state page-loading">Đang tải nội dung email…</div>
+}
+else if (_mail is null)
+{
+    <div class="empty-state"><h1>Không tìm thấy email</h1><a href="/">Quay lại hộp thư</a></div>
+}
+else
+{
+    <article class="message-view">
+        <div class="message-actions">
+            <button class="btn ghost" @onclick="GoBack">← Quay lại</button>
+            <span class="account-pill">@_mail.MailAccount.EmailAddress</span>
+        </div>
+
+        <header class="message-header">
+            <h1>@_mail.Subject</h1>
+            <div class="message-sender-row">
+                <div class="sender-avatar large">@Avatar(_mail)</div>
+                <div>
+                    <strong>@Sender(_mail)</strong>
+                    <div class="muted">@_mail.FromAddress</div>
+                    <div class="muted small">Đến: @_mail.ToText</div>
+                </div>
+                <time>@FormatDateTime(_mail.ReceivedAtUtc)</time>
+            </div>
+        </header>
+
+        @if (!string.IsNullOrWhiteSpace(_loadError))
+        {
+            <div class="alert danger">
+                Không tải được body từ IMAP: @_loadError
+            </div>
+        }
+
+        <section class="message-body">
+            @if (string.IsNullOrWhiteSpace(_mail.BodyText))
+            {
+                <p class="muted">Email này chưa có nội dung dạng văn bản hoặc chưa tải được body.</p>
+            }
+            else
+            {
+                <pre>@_mail.BodyText</pre>
+            }
+        </section>
+
+        @if (_mail.HasAttachments)
+        {
+            <div class="attachment-note">📎 Email có tệp đính kèm. Bản MVP hiện chỉ hiển thị trạng thái, chưa tải file.</div>
+        }
+    </article>
+}
+
+@code {
+    [Parameter] public long MailId { get; set; }
+
+    private MailMessage? _mail;
+    private bool _loading = true;
+    private string? _loadError;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _loading = true;
+        _loadError = null;
+
+        await LoadFromDbAsync();
+
+        if (_mail is not null && _mail.BodyLoadedAtUtc is null)
+        {
+            try
+            {
+                await MailService.LoadBodyAsync(MailId);
+                await LoadFromDbAsync();
+            }
+            catch (Exception ex)
+            {
+                _loadError = ex.Message;
+            }
+        }
+
+        _loading = false;
+    }
+
+    private async Task LoadFromDbAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _mail = await db.MailMessages
+            .AsNoTracking()
+            .Include(x => x.MailAccount)
+            .FirstOrDefaultAsync(x => x.Id == MailId);
+    }
+
+    private void GoBack()
+    {
+        if (_mail is not null)
+            Navigation.NavigateTo($"/account/{_mail.MailAccountId}");
+        else
+            Navigation.NavigateTo("/");
+    }
+
+    private static string Sender(MailMessage mail) => !string.IsNullOrWhiteSpace(mail.FromName) ? mail.FromName : mail.FromAddress;
+    private static string Avatar(MailMessage mail) => string.IsNullOrWhiteSpace(Sender(mail)) ? "?" : Sender(mail).Trim()[..1].ToUpperInvariant();
+    private static string FormatDateTime(DateTime utc) => DateTime.SpecifyKind(utc, DateTimeKind.Utc).AddHours(7).ToString("HH:mm, dd/MM/yyyy");
+}

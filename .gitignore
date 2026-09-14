@@ -1,0 +1,8 @@
+bin/
+obj/
+.vs/
+.idea/
+*.user
+*.suo
+src/TvtMail/DataProtection-Keys/
+publish/

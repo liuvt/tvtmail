@@ -1,0 +1,151 @@
+@page "/account/{AccountId:int}"
+@attribute [Authorize]
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject ImapMailService MailService
+@inject NavigationManager Navigation
+
+<PageTitle>@(_account?.EmailAddress ?? "Mailbox") - TVT Mail</PageTitle>
+
+@if (_account is null && !_loading)
+{
+    <div class="empty-state"><h1>Không tìm thấy tài khoản</h1><a href="/accounts">Quản lý tài khoản</a></div>
+}
+else
+{
+    <section class="page-header">
+        <div>
+            <span class="eyebrow">MAILBOX</span>
+            <h1>@(_account?.DisplayName ?? "Đang tải…")</h1>
+            <p>@_account?.EmailAddress</p>
+        </div>
+        <button class="btn primary" @onclick="SyncAsync" disabled="@_syncing">
+            @(_syncing ? "Đang đồng bộ…" : "↻ Đồng bộ tài khoản")
+        </button>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_account?.LastError))
+    {
+        <div class="alert danger"><strong>Lỗi IMAP:</strong> @_account.LastError</div>
+    }
+
+    <section class="mail-panel">
+        <div class="mail-toolbar">
+            <div class="search-box">
+                <span>🔎</span>
+                <input @bind="_search" @bind:event="oninput" placeholder="Tìm trong tài khoản này…" />
+            </div>
+            <span class="mail-count">@FilteredMails.Count() thư</span>
+        </div>
+
+        @if (_loading)
+        {
+            <div class="loading-state">Đang tải…</div>
+        }
+        else if (_mails.Count == 0)
+        {
+            <div class="empty-state compact"><h2>Chưa có thư</h2><p>Thử đồng bộ lại tài khoản này.</p></div>
+        }
+        else
+        {
+            <div class="mail-list">
+                @foreach (var mail in FilteredMails)
+                {
+                    <button type="button" class="mail-row @(mail.IsSeen ? "" : "unread")" @onclick="() => OpenMail(mail.Id)">
+                        <span class="sender-avatar">@Avatar(mail)</span>
+                        <span class="mail-main">
+                            <span class="mail-line-one"><strong>@Sender(mail)</strong></span>
+                            <span class="mail-subject">@mail.Subject</span>
+                            <span class="mail-preview">@(!string.IsNullOrWhiteSpace(mail.Preview) ? mail.Preview : mail.FromAddress)</span>
+                        </span>
+                        <span class="mail-meta"><time>@FormatDate(mail.ReceivedAtUtc)</time></span>
+                    </button>
+                }
+            </div>
+            @if (_mails.Count < _totalCount)
+            {
+                <div class="load-more-wrap">
+                    <button class="btn secondary" @onclick="LoadMoreAsync">Tải thêm thư cũ (@(_totalCount - _mails.Count) còn lại)</button>
+                </div>
+            }
+        }
+    </section>
+}
+
+@if (!string.IsNullOrWhiteSpace(_error))
+{
+    <div class="toast-error">@_error</div>
+}
+
+@code {
+    [Parameter] public int AccountId { get; set; }
+
+    private MailAccount? _account;
+    private List<MailMessage> _mails = new();
+    private string _search = string.Empty;
+    private string? _error;
+    private bool _loading = true;
+    private bool _syncing;
+    private int _take = 300;
+    private int _totalCount;
+
+    private IEnumerable<MailMessage> FilteredMails
+        => string.IsNullOrWhiteSpace(_search)
+            ? _mails
+            : _mails.Where(x => x.Subject.Contains(_search, StringComparison.OrdinalIgnoreCase)
+                                || x.FromName.Contains(_search, StringComparison.OrdinalIgnoreCase)
+                                || x.FromAddress.Contains(_search, StringComparison.OrdinalIgnoreCase));
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _account = await db.MailAccounts.AsNoTracking().FirstOrDefaultAsync(x => x.Id == AccountId);
+        _totalCount = await db.MailMessages.CountAsync(x => x.MailAccountId == AccountId);
+        _mails = await db.MailMessages
+            .AsNoTracking()
+            .Where(x => x.MailAccountId == AccountId)
+            .OrderByDescending(x => x.ReceivedAtUtc)
+            .Take(_take)
+            .ToListAsync();
+        _loading = false;
+    }
+
+    private async Task LoadMoreAsync()
+    {
+        _take += 300;
+        await LoadAsync();
+    }
+
+    private async Task SyncAsync()
+    {
+        _syncing = true;
+        _error = null;
+        try
+        {
+            await MailService.SyncAccountAsync(AccountId);
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            await LoadAsync();
+        }
+        finally
+        {
+            _syncing = false;
+        }
+    }
+
+    private void OpenMail(long id) => Navigation.NavigateTo($"/mail/{id}");
+
+    private static string Sender(MailMessage mail) => !string.IsNullOrWhiteSpace(mail.FromName) ? mail.FromName : mail.FromAddress;
+    private static string Avatar(MailMessage mail) => string.IsNullOrWhiteSpace(Sender(mail)) ? "?" : Sender(mail).Trim()[..1].ToUpperInvariant();
+    private static string FormatDate(DateTime utc)
+    {
+        var vietnam = DateTime.SpecifyKind(utc, DateTimeKind.Utc).AddHours(7);
+        var now = DateTime.UtcNow.AddHours(7);
+        return vietnam.Date == now.Date ? vietnam.ToString("HH:mm") : vietnam.ToString("dd/MM/yyyy");
+    }
+}

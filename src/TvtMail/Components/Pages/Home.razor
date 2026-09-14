@@ -1,0 +1,197 @@
+@page "/"
+@attribute [Authorize]
+@inject IDbContextFactory<AppDbContext> DbFactory
+@inject ImapMailService MailService
+@inject NavigationManager Navigation
+
+<PageTitle>Hộp thư tổng - TVT Mail</PageTitle>
+
+<section class="page-header">
+    <div>
+        <span class="eyebrow">UNIFIED INBOX</span>
+        <h1>Hộp thư tổng</h1>
+        <p>Tất cả email từ các tài khoản đang kết nối.</p>
+    </div>
+    <button class="btn primary" @onclick="SyncAllAsync" disabled="@_syncing">
+        @(_syncing ? "Đang đồng bộ…" : "↻ Đồng bộ tất cả")
+    </button>
+</section>
+
+<div class="stats-grid">
+    <div class="stat-card">
+        <span>Tài khoản</span>
+        <strong>@_accountCount</strong>
+        <small>mailbox đang quản lý</small>
+    </div>
+    <div class="stat-card">
+        <span>Tổng thư</span>
+        <strong>@_messageCount</strong>
+        <small>đã cache từ INBOX</small>
+    </div>
+    <div class="stat-card">
+        <span>Chưa đọc</span>
+        <strong>@_unreadCount</strong>
+        <small>theo trạng thái lần đồng bộ</small>
+    </div>
+</div>
+
+<section class="mail-panel">
+    <div class="mail-toolbar">
+        <div class="search-box">
+            <span>🔎</span>
+            <input @bind="_search" @bind:event="oninput" placeholder="Tìm người gửi, tiêu đề, tài khoản…" />
+        </div>
+        <span class="mail-count">@FilteredMails.Count() thư đang hiển thị</span>
+    </div>
+
+    @if (_loading)
+    {
+        <div class="loading-state">Đang tải hộp thư…</div>
+    }
+    else if (_mails.Count == 0)
+    {
+        <div class="empty-state compact">
+            <div class="empty-icon">✉</div>
+            <h2>Chưa có email</h2>
+            <p>Thêm tài khoản mail, sau đó bấm “Đồng bộ tất cả”.</p>
+            <a class="btn primary" href="/accounts">Thêm tài khoản</a>
+        </div>
+    }
+    else
+    {
+        <div class="mail-list">
+            @foreach (var mail in FilteredMails)
+            {
+                <button type="button" class="mail-row @(mail.IsSeen ? "" : "unread")" @onclick="() => OpenMail(mail.Id)">
+                    <span class="sender-avatar">@Avatar(mail)</span>
+                    <span class="mail-main">
+                        <span class="mail-line-one">
+                            <strong>@Sender(mail)</strong>
+                            <span class="account-pill">@mail.MailAccount.EmailAddress</span>
+                        </span>
+                        <span class="mail-subject">@mail.Subject</span>
+                        <span class="mail-preview">@Preview(mail)</span>
+                    </span>
+                    <span class="mail-meta">
+                        <time>@FormatDate(mail.ReceivedAtUtc)</time>
+                        @if (mail.HasAttachments)
+                        {
+                            <span title="Có tệp đính kèm">📎</span>
+                        }
+                    </span>
+                </button>
+            }
+        </div>
+        @if (_mails.Count < _messageCount)
+        {
+            <div class="load-more-wrap">
+                <button class="btn secondary" @onclick="LoadMoreAsync">Tải thêm thư cũ (@(_messageCount - _mails.Count) còn lại)</button>
+            </div>
+        }
+    }
+</section>
+
+@if (!string.IsNullOrWhiteSpace(_error))
+{
+    <div class="toast-error">@_error</div>
+}
+
+@code {
+    private List<MailMessage> _mails = new();
+    private string _search = string.Empty;
+    private string? _error;
+    private bool _loading = true;
+    private bool _syncing;
+    private int _accountCount;
+    private int _messageCount;
+    private int _unreadCount;
+    private int _take = 300;
+
+    private IEnumerable<MailMessage> FilteredMails
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(_search))
+                return _mails;
+
+            var term = _search.Trim();
+            return _mails.Where(x =>
+                x.Subject.Contains(term, StringComparison.OrdinalIgnoreCase)
+                || x.FromName.Contains(term, StringComparison.OrdinalIgnoreCase)
+                || x.FromAddress.Contains(term, StringComparison.OrdinalIgnoreCase)
+                || x.MailAccount.EmailAddress.Contains(term, StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        await using var db = await DbFactory.CreateDbContextAsync();
+
+        _accountCount = await db.MailAccounts.CountAsync();
+        _messageCount = await db.MailMessages.CountAsync();
+        _unreadCount = await db.MailMessages.CountAsync(x => !x.IsSeen);
+
+        _mails = await db.MailMessages
+            .AsNoTracking()
+            .Include(x => x.MailAccount)
+            .OrderByDescending(x => x.ReceivedAtUtc)
+            .Take(_take)
+            .ToListAsync();
+
+        _loading = false;
+    }
+
+    private async Task LoadMoreAsync()
+    {
+        _take += 300;
+        await LoadAsync();
+    }
+
+    private async Task SyncAllAsync()
+    {
+        if (_syncing)
+            return;
+
+        _syncing = true;
+        _error = null;
+
+        try
+        {
+            await MailService.SyncAllAsync();
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = $"Đồng bộ chưa hoàn tất: {ex.Message}";
+        }
+        finally
+        {
+            _syncing = false;
+        }
+    }
+
+    private void OpenMail(long id) => Navigation.NavigateTo($"/mail/{id}");
+
+    private static string Sender(MailMessage mail)
+        => !string.IsNullOrWhiteSpace(mail.FromName) ? mail.FromName : mail.FromAddress;
+
+    private static string Preview(MailMessage mail)
+        => !string.IsNullOrWhiteSpace(mail.Preview) ? mail.Preview : mail.FromAddress;
+
+    private static string Avatar(MailMessage mail)
+    {
+        var sender = Sender(mail).Trim();
+        if (string.IsNullOrEmpty(sender)) return "?";
+        return sender[..1].ToUpperInvariant();
+    }
+
+    private static string FormatDate(DateTime utc)
+    {
+        var vietnam = DateTime.SpecifyKind(utc, DateTimeKind.Utc).AddHours(7);
+        var now = DateTime.UtcNow.AddHours(7);
+        return vietnam.Date == now.Date ? vietnam.ToString("HH:mm") : vietnam.ToString("dd/MM/yyyy");
+    }
+}

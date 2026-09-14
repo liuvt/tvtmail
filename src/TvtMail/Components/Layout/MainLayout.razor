@@ -1,0 +1,66 @@
+@inherits LayoutComponentBase
+@inject IDbContextFactory<AppDbContext> DbFactory
+
+<div class="app-shell">
+    <aside class="sidebar">
+        <a class="brand" href="/">
+            <span class="brand-mark">TV</span>
+            <span>
+                <strong>TVT Mail</strong>
+                <small>Unified inbox</small>
+            </span>
+        </a>
+
+        <nav class="primary-nav">
+            <NavLink href="/" Match="NavLinkMatch.All" class="nav-item">
+                <span class="nav-icon">▣</span>
+                <span>Hộp thư tổng</span>
+            </NavLink>
+            <NavLink href="/accounts" class="nav-item">
+                <span class="nav-icon">⚙</span>
+                <span>Tài khoản mail</span>
+            </NavLink>
+        </nav>
+
+        <div class="sidebar-section-title">TÀI KHOẢN</div>
+        <div class="account-nav-list">
+            @foreach (var account in _accounts)
+            {
+                <NavLink href="@($"/account/{account.Id}")" class="account-nav-item">
+                    <span class="account-dot @(account.IsActive ? "online" : "offline")"></span>
+                    <span class="account-nav-text">
+                        <strong>@(!string.IsNullOrWhiteSpace(account.DisplayName) ? account.DisplayName : account.EmailAddress)</strong>
+                        <small>@account.EmailAddress</small>
+                    </span>
+                </NavLink>
+            }
+
+            @if (_accounts.Count == 0)
+            {
+                <a class="sidebar-empty" href="/accounts">+ Thêm mailbox đầu tiên</a>
+            }
+        </div>
+
+        <div class="sidebar-footer">
+            <a href="/auth/logout" class="logout-link">Đăng xuất</a>
+        </div>
+    </aside>
+
+    <main class="main-content">
+        @Body
+    </main>
+</div>
+
+@code {
+    private List<MailAccount> _accounts = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _accounts = await db.MailAccounts
+            .AsNoTracking()
+            .OrderBy(x => x.DisplayName)
+            .ThenBy(x => x.EmailAddress)
+            .ToListAsync();
+    }
+}

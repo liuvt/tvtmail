@@ -1,0 +1,14 @@
+@inject NavigationManager Navigation
+
+<div class="login-shell">
+    <div class="login-card">
+        <p>Đang chuyển đến trang đăng nhập…</p>
+    </div>
+</div>
+
+@code {
+    protected override void OnInitialized()
+    {
+        Navigation.NavigateTo("/login", forceLoad: true);
+    }
+}

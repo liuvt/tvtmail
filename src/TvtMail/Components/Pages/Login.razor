@@ -1,0 +1,36 @@
+@page "/login"
+@layout EmptyLayout
+@attribute [AllowAnonymous]
+@inject NavigationManager Navigation
+
+<PageTitle>Đăng nhập - TVT Mail</PageTitle>
+
+<div class="login-shell">
+    <div class="login-card">
+        <div class="login-logo">TV</div>
+        <h1>TVT Mail</h1>
+        <p class="muted">Quản lý nhiều mailbox trên một giao diện.</p>
+
+        @if (HasError)
+        {
+            <div class="alert danger">Email hoặc mật khẩu quản trị không đúng.</div>
+        }
+
+        <form method="post" action="/auth/login" class="login-form">
+            <label>Email quản trị</label>
+            <input name="email" type="email" autocomplete="username" required autofocus />
+
+            <label>Mật khẩu</label>
+            <input name="password" type="password" autocomplete="current-password" required />
+
+            <button type="submit" class="btn primary full">Đăng nhập</button>
+        </form>
+
+        <p class="login-note">Hãy đổi <code>AdminAuth__Password</code> trước khi đưa lên Internet.</p>
+    </div>
+</div>
+
+@code {
+    private bool HasError
+        => new Uri(Navigation.Uri).Query.Contains("error=1", StringComparison.OrdinalIgnoreCase);
+}
